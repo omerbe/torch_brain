@@ -1,3 +1,5 @@
+## python -m train
+
 import logging
 
 import hydra
@@ -261,7 +263,7 @@ class DataModule(L.LightningDataModule):
         return test_loader
 
 
-@hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
+@hydra.main(version_base="1.3", config_path="./configs", config_name="train_poyo_mp.yaml")#"train.yaml"
 def main(cfg: DictConfig):
     logger.info("POYO!")
 
