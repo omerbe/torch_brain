@@ -121,6 +121,13 @@ class Dataset(torch.utils.data.Dataset):
             }
         else:
             raise ValueError("Please either specify a config file or a recording_id.")
+            
+        if config[0]["selection"][0]["brainset"] == "perich_miller_population_2018":
+            print("dataset: perich_miller_population_2018")
+            bad_days = {"perich_miller_population_2018/c_20131003_center_out_reaching"}
+            for day in bad_days:
+                self.recording_dict.pop(day)
+
 
         self._open_files = {
             recording_id: h5py.File(recording_info["filename"], "r")
@@ -390,7 +397,7 @@ class Dataset(torch.utils.data.Dataset):
         if np.__version__ >= "2.0":
             return np.strings.add(prefix_str, data.units.id.astype(str))
         else:
-            return np.core.defchararray.add(prefix_str, data.units.id.astype(str))
+            return np.core.defchararray.add(prefix_str, data.units.id.astype(str)) #id unit_id
 
     def _get_session_id_with_prefix(self, data: Data) -> str:
         r"""Return session id with prefix applied"""

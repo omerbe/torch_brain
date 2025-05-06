@@ -247,7 +247,8 @@ class DecodingStitchEvaluator(L.Callback):
         ).mean()
 
         # log the metrics
-        self.log_dict(metrics)
+        
+        self.log_dict(metrics) #############
 
         metrics_data = []
         for metric_name, metric_value in metrics.items():

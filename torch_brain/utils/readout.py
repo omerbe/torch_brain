@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 import numpy as np
 from temporaldata import Data
+import logging
 
 import torch_brain
 from torch_brain.utils import (

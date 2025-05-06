@@ -5,13 +5,13 @@ import lightning as L
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch_optimizer import Lamb
 from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
     ModelSummary,
 )
 from omegaconf import DictConfig, OmegaConf
-from temporaldata import Data
 
 import numpy as np
 
@@ -21,15 +21,10 @@ from pathlib import Path
 import sys
 path_root = Path(__file__).parents[2]
 sys.path.append(str(path_root))
-
-import warnings
-
-warnings.filterwarnings("ignore", ".*when logging on epoch level in distributed setting to accumulate the metric across devices.*")
-from lightning.pytorch.utilities import grad_norm
 #########################
 
+
 from torch_brain.registry import MODALITY_REGISTRY, ModalitySpec
-from torch_brain.optim import SparseLamb
 from torch_brain.models.poyo import POYO
 from torch_brain.utils import callbacks as tbrain_callbacks
 from torch_brain.utils import seed_everything
@@ -65,25 +60,13 @@ class TrainWrapper(L.LightningModule):
         self.modality_spec = modality_spec
         self.save_hyperparameters(OmegaConf.to_container(cfg))
         self.results = {}
+        
 
     def configure_optimizers(self):
         max_lr = self.cfg.optim.base_lr * self.cfg.batch_size  # linear scaling rule
 
-        special_emb_params = list(self.model.unit_emb.parameters()) + list(
-            self.model.session_emb.parameters()
-        )
-
-        remaining_params = [
-            p
-            for n, p in self.model.named_parameters()
-            if "unit_emb" not in n and "session_emb" not in n
-        ]
-
-        optimizer = SparseLamb(
-            [
-                {"params": special_emb_params, "sparse": True},
-                {"params": remaining_params},
-            ],
+        optimizer = Lamb(
+            self.model.parameters(),
             lr=max_lr,
             weight_decay=self.cfg.optim.weight_decay,
         )
@@ -91,7 +74,7 @@ class TrainWrapper(L.LightningModule):
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
-            total_steps= self.trainer.estimated_stepping_batches,
+            total_steps=self.trainer.estimated_stepping_batches,
             pct_start=self.cfg.optim.lr_decay_start,
             anneal_strategy="cos",
             div_factor=1,
@@ -109,6 +92,7 @@ class TrainWrapper(L.LightningModule):
 
         # forward pass
         output_values = self.model(**batch["model_inputs"])
+        # print(output_values.shape)
 
         # compute loss
         mask = batch["model_inputs"]["output_mask"]
@@ -140,6 +124,15 @@ class TrainWrapper(L.LightningModule):
 
         # forward pass
         output_values = self.model(**batch["model_inputs"])
+        # print(output_values.shape)
+        # if test:
+        #     self.predictions[batch_idx] = output_values.detach().cpu().numpy()
+        #     print(output_values.shape)
+        #     self.targets[batch_idx] = batch["target_values"].detach().cpu().numpy()
+        #     if batch_idx == 2:
+        #         results = {"predictions": self.predictions, "targets": self.targets}
+        #         np.save("test_results.npy", results)
+        #         print("Test results saved to test_results.npy")
 
         # prepare data for evaluator
         # (goes to DecodingStitchEvaluator.on_validation_batch_end)
@@ -158,7 +151,6 @@ class TrainWrapper(L.LightningModule):
             eval_masks = data_for_eval.eval_masks.detach().cpu().numpy()
             self.results[batch_idx] = {"predictions": predictions, "targets": targets, "eval_masks": eval_masks}
             np.save("test_results.npy", self.results)
-
         return data_for_eval
 
     def test_step(self, batch, batch_idx):
@@ -171,7 +163,7 @@ class DataModule(L.LightningDataModule):
         self.cfg = cfg
         self.log = logging.getLogger(__name__)
 
-    def setup_dataset_and_link_model(self, model: POYO):
+    def setup_dataset_and_link_model(self, model: POYO, finetuning: bool):
         r"""Setup Dataset objects, and update a given model's embedding vocabs (session
         and unit_emb)
         """
@@ -186,7 +178,7 @@ class DataModule(L.LightningDataModule):
         )
         self.train_dataset.disable_data_leakage_check()
 
-        self._init_model_vocab(model)
+        self._init_model_vocab(model, finetuning)
 
         eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
 
@@ -205,11 +197,19 @@ class DataModule(L.LightningDataModule):
             transform=Compose([*eval_transforms, model.tokenize]),
         )
         self.test_dataset.disable_data_leakage_check()
+              
 
-    def _init_model_vocab(self, model: POYO):
-        # TODO: Add code for finetuning situation (when model already has a vocab)
-        model.unit_emb.initialize_vocab(self.get_unit_ids())
-        model.session_emb.initialize_vocab(self.get_session_ids())
+    def _init_model_vocab(self, model: POYO, finetuning: bool):
+        unit_ids, session_ids = self.get_unit_ids(), self.get_session_ids()
+
+        if not finetuning:
+            model.unit_emb.initialize_vocab(unit_ids)
+            model.session_emb.initialize_vocab(session_ids)
+        else:
+            model.unit_emb.extend_vocab(unit_ids, exist_ok=True) #embeddings for these existing words won't be re-initialized.
+            model.unit_emb.subset_vocab(unit_ids)
+            model.session_emb.extend_vocab(session_ids, exist_ok=True)
+            model.session_emb.subset_vocab(session_ids)
 
     def get_session_ids(self):
         return self.train_dataset.get_session_ids()
@@ -227,7 +227,6 @@ class DataModule(L.LightningDataModule):
             generator=torch.Generator().manual_seed(self.cfg.seed + 1),
         )
 
-
         train_loader = DataLoader(
             self.train_dataset,
             sampler=train_sampler,
@@ -243,15 +242,6 @@ class DataModule(L.LightningDataModule):
         self.log.info(f"Training on {len(train_sampler)} samples")
         self.log.info(f"Training on {len(self.train_dataset.get_unit_ids())} units")
         self.log.info(f"Training on {len(self.get_session_ids())} sessions")
-        self.log.info(f"batch size: {self.cfg.batch_size}")
-        
-        read_config = self.train_dataset.config[0].config["readout"] # only for the first brainset
-        normalize_mean, normalize_std = "normalize_mean", "normalize_std"
-        if normalize_mean in read_config: 
-            self.log.info(f"normalize_mean: {read_config[normalize_mean]}")
-        if normalize_std in read_config: 
-            self.log.info(f"normalize_std: {read_config[normalize_std]}")
-
 
         return train_loader
 
@@ -307,6 +297,71 @@ class DataModule(L.LightningDataModule):
         return test_loader
 
 
+class GradualUnfreezing(L.Callback):
+    def __init__(self, unfreeze_at_epoch: int):
+        self.enabled = unfreeze_at_epoch != 0
+        self.unfreeze_at_epoch = unfreeze_at_epoch
+        self.frozen_params = None
+
+    @staticmethod
+    def freeze(model: POYO):
+        layers_to_freeze = [
+            model.token_type_emb,
+            model.latent_emb,
+            model.enc_atn,
+            model.enc_ffn,
+            model.proc_layers,
+            model.dec_atn,
+            model.dec_ffn,
+            model.readout,
+        ]
+
+        frozen_params = []
+        for layer in layers_to_freeze:
+            for param in layer.parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+                    frozen_params.append(param)
+
+        return frozen_params
+
+    def on_train_start(self, trainer, pl_module):
+        if self.enabled:
+            self.frozen_params = self.freeze(pl_module.model)
+            logger.info(
+                f"Perceiver frozen at epoch 0. "
+                f"Will stay frozen until epoch {self.unfreeze_at_epoch}."
+            )
+
+    def on_train_epoch_start(self, trainer, pl_module):
+        if self.enabled and (trainer.current_epoch == self.unfreeze_at_epoch):
+            if self.frozen_params is None:
+                raise RuntimeError("Model has not been frozen yet.")
+
+            for param in self.frozen_params:
+                param.requires_grad = True
+
+            self.frozen_params = None
+            logger.info(f"Perceiver unfrozen at epoch {trainer.current_epoch}")
+
+
+def load_model_from_ckpt(model: nn.Module, ckpt_path: str) -> None:
+    if ckpt_path is None:
+        raise ValueError(
+            "No checkpoint path provided. Setting 'ckpt_path' is necessary when "
+            "finetuning."
+        )
+
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    state_dict = ckpt["state_dict"]
+    state_dict = {
+        k.replace("model.", ""): v
+        for k, v in state_dict.items()
+        if k.startswith("model.")
+    }
+    model.load_state_dict(state_dict)
+
+
 @hydra.main(version_base="1.3", config_path="./configs", config_name="train_poyo_mp.yaml")
 def main(cfg: DictConfig):
     logger.info("POYO!")
@@ -330,10 +385,17 @@ def main(cfg: DictConfig):
     readout_id = cfg.dataset[0].config.readout.readout_id
     readout_spec = MODALITY_REGISTRY[readout_id]
 
-    # make model and data module
+    # initialize model
     model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
+    if cfg.finetuning.enable:
+        load_model_from_ckpt(model, cfg.ckpt_path)
+
+    # setup datamodule and model vocabs
     data_module = DataModule(cfg=cfg)
-    data_module.setup_dataset_and_link_model(model)
+    data_module.setup_dataset_and_link_model(
+        model=model,
+        finetuning=cfg.finetuning.enable,
+    )
 
     # Lightning train wrapper
     wrapper = TrainWrapper(
@@ -363,6 +425,9 @@ def main(cfg: DictConfig):
         tbrain_callbacks.ModelWeightStatsLogger(),
     ]
 
+    if cfg.finetuning.enable:
+        callbacks.append(GradualUnfreezing(cfg.finetuning.freeze_perceiver_until_epoch))
+
     trainer = L.Trainer(
         logger=wandb_logger,
         default_root_dir=cfg.log_dir,
@@ -376,11 +441,12 @@ def main(cfg: DictConfig):
         num_nodes=cfg.nodes,
         limit_val_batches=None,  # Ensure no limit on validation batches
         num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
-        # detect_anomaly=True,
+        strategy='ddp_find_unused_parameters_true',
     )
 
     # Train
-    trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
+    resume_ckpt_path = cfg.ckpt_path if not cfg.finetuning.enable else None
+    trainer.fit(wrapper, data_module, ckpt_path=resume_ckpt_path)
 
     # Test
     trainer.test(wrapper, data_module, ckpt_path="best")

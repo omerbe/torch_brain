@@ -54,6 +54,7 @@ class RandomFixedWindowSampler(torch.utils.data.Sampler):
         for session_name, sampling_intervals in self.sampling_intervals.items():
             for start, end in zip(sampling_intervals.start, sampling_intervals.end):
                 interval_length = end - start
+                # print(interval_length)
                 if interval_length < self.window_length:
                     if self.drop_short:
                         total_short_dropped += interval_length

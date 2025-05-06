@@ -93,6 +93,14 @@ def get_modality_by_id(modality_id: int) -> ModalitySpec:
         raise KeyError(f"No modality found with ID {modality_id}")
     return _ID_TO_MODALITY[modality_id]
 
+register_modality(
+    "cursor_position_and_velocity_4d",
+    dim=4,
+    type=DataType.CONTINUOUS,
+    timestamp_key="cursor.timestamps",
+    value_key="cursor.pos_and_vel",
+    loss_fn=torch_brain.nn.loss.MSELoss(),
+)
 
 register_modality(
     "cursor_velocity_2d",

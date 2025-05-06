@@ -11,8 +11,8 @@ eval_transforms: []
 
 # Training
 epochs: 1000
-batch_size: 128
-eval_epochs: 1  # frequency for doing validation
+batch_size: 64
+eval_epochs: 10  # frequency for doing validation
 eval_batch_size: null  # if null, will use batch_size
 seed: 42  # use to set random seed
 sanity_check_validation: false  # if true, will start the run with validation 
@@ -33,8 +33,17 @@ wandb:
 # GPU and CPU
 precision: 32
 nodes: 1
-gpus: 1
-num_workers: 4
+gpus: 2
+num_workers: 8
 
 # Checkpointing
-ckpt_path: null  # for resuming training, or loading a model during finetuning
+ckpt_path:  null # ./logs/poyo/bc41dgwi/checkpoints/epoch=354-step=57510.ckpt # null # poyo_mp.ckpt  
+# for resuming training, or loading a model during finetuning
+finetuning:
+  enable: False  # must specify ckpt_path if you want to finetune
+  freeze_perceiver_until_epoch: 100
+  # ^ Num of epochs to freeze perceiver network while finetuning
+  # -1 => Keep frozen, i.e. perform Unit-identification
+  #  0 => Train everything
+  # >0 => Only train unit/session embeddings for first few epochs,
+  #       and then train everything
