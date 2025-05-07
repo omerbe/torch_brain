@@ -1,3 +1,8 @@
+## Evaluation on internal lab dataset
+As part of my work for the [Chestek Lab](https://chestekresearch.engin.umich.edu/), I used the POYO framework to assess whether including past days in the training set improves test performance of future days. Specifically, this was in regard to an internal lab 174 day dataset that contained neural channel spike times with the corresponding finger kinematics. To do this, I trained an 11.8M parameter model on varying amount of training days to decode 2D finger velocities. The training sets consisted of 174 days, 100 days, 50 days, 20 days, and then each of the last 20 days individually. This ensured that the train and test splits of last 20 days of the dataset were present in each model, giving a consistent test set to evaluate the models. Of those last 20 days, 4 had single day models with an R2 score <= 0.05, likely the result of poor neural recordings on these days. The results can be seen in the two box plots below, one with all 20 days and one with the 4 "bad" days removed. 
+
+
+
 <p align="left">
     <img height="250" src="https://torch-brain.readthedocs.io/en/latest/_static/torch_brain_logo.png" />
 </p>
