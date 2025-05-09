@@ -5,8 +5,6 @@ As part of my work for the [Chestek Lab](https://chestekresearch.engin.umich.edu
 
 As can be seen above, adding more days to the training dataset does indeed improve performance. In regards to the entire 20 day test set, the 174 day model had a mean and median that were both 10% greater than that of the aggregated  single day models.
 
-The remainder of this ReadMe is that of the original torch_brain repo.
-
 <p align="left">
     <img height="250" src="https://torch-brain.readthedocs.io/en/latest/_static/torch_brain_logo.png" />
 </p>
